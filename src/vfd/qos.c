@@ -54,6 +54,8 @@ static void qos_disable_arb( portid_t pf ) {
 		CONFLICT:  there is a conflict in the data sheet with regard to the BDPM setting
 					section 4 says the bit should be set, while the description of this
 					register in section 8 states that the bit should not be set in dcb mode.
+					Through experimentation, both of the high order bits MUST be off or
+					Tx doesn't happen when WEE and WSP bits are both set.
 
                         +--- bypass buffer free space mon (must be cleared for sriov or dcb)
                         |+--- bypass data pipe monitor ?????? value uncertain -- conflict in doc
@@ -63,10 +65,10 @@ static void qos_disable_arb( portid_t pf ) {
                         ||                       |     |
                         ||                       |     |+-- 0==RR 1==WSP (TDPAC) TC
                         ||                       |     ||
-            crrr rrrr   01rr cccr   rrrr rrrr   r0r1 rr10
+            crrr rrrr   01rr cccr   rrrr rrrr   r0r1 rr11
             xxxx xxxx   xxxx xxxx   xxxx xxxx   xxxx xxxx
 	mask:   ff          3f          ff          ac
-	val     00          40          00          12
+	val     00          40          00          13
 
 	NOTE:		In RR mode, BWG and TC parameters do NOT apply.
 	QUESTION:	I think we want WRR (for VM arb) and RR (TC arb), !WSP, for a low value of 0x12; right?
@@ -102,22 +104,30 @@ static void qos_enable_arb( portid_t pf ) {
 
 	offset = 0x04900;			// RTTDCS
 	mask = 0xff3fffac;			
-	if( option1 ) {
-		val = 0x00400012;
+	if( (option1 % 2) == 0 ) {
+		val = 0x00000012;
 	} else {
-		val = 0x00400013;
+		val = 0x00000013;
 	}
 	cval = port_pci_reg_read( pf, offset );						// snag current 
 	port_pci_reg_write( pf, offset, (cval & mask) | val );		
 	bleat_printf( 1, ">>>> qos: set_enable_rttdcs (%08x & %08x) | %08x = %08x", cval, mask, val, (cval & mask) | val );
 
+
+	//----------------------------------------------------------------------------------
 	offset = 0x0cd00;			// RTTPCS
 	mask = 0x003ffedf;
-	val = 0x01000100;
+	if( ((option1 > 1) % 2 ) == 0 ) {
+		val = 0x01000100;					// rr
+	} else {
+		val = 0x01000120;					// strict
+	}
 	cval = port_pci_reg_read( pf, offset );						// snag current 
 	port_pci_reg_write( pf, offset, (cval & mask) | val );		// add our bits and clear what we don't want
 	bleat_printf( 1, ">>>> qos: set_enable_rttpcsarb (%08x & %08x) | %08x = %08x", cval, mask, val, (cval & mask) | val );
 
+
+	//----------------------------------------------------------------------------------
 	offset = 0x02430;			// RTRPCS
 	val = 0x00000006;
 	cval = port_pci_reg_read( pf, offset );						// snag current 
@@ -126,7 +136,9 @@ static void qos_enable_arb( portid_t pf ) {
 }
 
 /*
-	Set dcb transmit descriptor plane (TC arbitor) t2 config [0-7].
+	This function sets _both_ the Tx descriptor (dp) _and_ packet plane (pp)
+	t2 configurations as they are both set to the same set of values.
+
 	This configures each traffic class allowing the percentage of total 
 	bandwidth which can be consumed by the class to be conifgured. CR (credit
 	refil) is the number of credits allocated to the class each cycle.
@@ -136,9 +148,6 @@ static void qos_enable_arb( portid_t pf ) {
 	For now we set them all the same.
 
 	FUTURE:  if dynamically setting gsp or lsp changes will be needed
-
-	This sets the TC refil credits, and TC max credits.  Also allows the
-	TC to be placed into a BWG  and for LSP/GSP to be set.
 
     |- 1==lsp                   |-- bwg index
     |                           |
@@ -153,23 +162,32 @@ static void qos_enable_arb( portid_t pf ) {
 static void qos_set_tdplane( portid_t pf ) {
 	int i;
 	uint32_t cval;			// current value
-	uint32_t offset;
+	uint32_t dp_offset;
+	uint32_t pp_offset;
 	uint32_t val = 0x002d00ff;	// max=0x2d0 (23:12)  group=n tc-credits=90 (8:0)  tc credits == 144
 	uint32_t mask = 0x3f000000;
 	uint32_t group = 0x00;		// we'll just use a sequential group and assign each tc to its own for now
 
-	offset = 0x04910;		// RTTDT2C
+	dp_offset = 0x04910;		// RTTDT2C
+	pp_offset = 0x0cd20;		// RTTPT2C
+
 	for( i = 0; i < 8; i++ ) {
 		group = i << 9;
-		cval = port_pci_reg_read( pf, offset );
-		port_pci_reg_write( pf, offset, (cval & mask) | val | group );		
+		cval = port_pci_reg_read( pf, dp_offset );
+		port_pci_reg_write( pf, dp_offset, (cval & mask) | val | group );		
 		bleat_printf( 1, ">>>> qos: rttdt2c  [%d] %08x & %08x | %08x = %08x g=0x%02x", i, cval, mask, val, (cval & mask) | val | group, group );
 
-		offset += 4;
+		cval = port_pci_reg_read( pf, pp_offset );
+		port_pci_reg_write( pf, pp_offset, (cval & mask) | val | group );		
+		bleat_printf( 1, ">>>> qos: rttpt2c  [%d] %08x & %08x | %08x = %08x g=0x%02x", i, cval, mask, val, (cval & mask) | val | group, group );
+
+		dp_offset += 4;
+		pp_offset += 4;
 	}
 }
 
 /*
+DEPRECATED --- must be the same values as rttdt2c, so both are set in same function
 	Set dcb transmit packet plane (VM arbitor) t2 config [0-7].
 	This allows for the configuration of each traffic class with respect to how the VM queues 
 	in the class are handled.  
@@ -185,7 +203,6 @@ static void qos_set_tdplane( portid_t pf ) {
        0    0     1    f     f  v       f    f			(vvv is the index value)
     0011 1111  0000 0000  0000 0001  0000 0000 mask
        3    f     0    0    0     0     0    0
-*/
 static void qos_set_txpplane( portid_t pf ) {
 	int i;
 	uint32_t cval;				// current value
@@ -204,6 +221,7 @@ static void qos_set_txpplane( portid_t pf ) {
 		offset += 4;
 	}
 }
+*/
 
 /*
 	Set dcb receive packet plane t2 config [0-7].
@@ -369,7 +387,6 @@ static void qos_set_vtctl( portid_t pf ) {
 
 	mask = 0x9fffe07e;
 	val = (1 << 29) + 1;		// drop packets which don't match a pool + enable VT
-	//val = 1;					// enable VT
 
 	offset = 0x051b0;			// PFVTCTL
 	cval = port_pci_reg_read( pf, offset );
@@ -382,6 +399,7 @@ static void qos_set_vtctl( portid_t pf ) {
 	The doc has the wrong section identified for this. The values 
 	coded here are based on section 8.2.3.9.15. 
 
+	WARNING:  Arbitors must be disabled when setting this register (and maybe others).
 */
 static void qos_set_mtqc( portid_t pf, int tc8_mode ) {
 	uint32_t	val = 0x0b;			// default to dcb-ena, vt-ena, TC0-3 & 32 VMs (1011)
@@ -393,7 +411,6 @@ static void qos_set_mtqc( portid_t pf, int tc8_mode ) {
 		val = 0x0f;					// dcb/vt,TC0-7 & 16 VMs
 	}
 
-
 	cval = port_pci_reg_read( pf, offset );
 	port_pci_reg_write( pf, offset, (cval & mask) | val );				// no mask needed; we're only setting bits
 	bleat_printf( 1, ">>> qos mtqc: offset=%8x %08x", offset, (cval&mask) | val );
@@ -403,8 +420,8 @@ static void qos_set_mtqc( portid_t pf, int tc8_mode ) {
 	Set the multiple receive queues command register based on 4 or 8 TCs
 
 	xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx
-       0    0    0    0 rrrr rrrr rrrr 1101	== 4tcs
-       0    0    0    0 rrrr rrrr rrrr 1100	== 8tcs
+       0    0    0    0 rrrr rrrr rrrr 1101	== 4TCs
+       0    0    0    0 rrrr rrrr rrrr 1100	== 8TCs
 
 	00 00 ff f0	mask
 
@@ -542,8 +559,8 @@ extern int enable_dcb_qos( portid_t pf, int* pctgs, int tc8_mode, int option ) {
 		return -1;
 	}
 
-												// Per note hidden in the data sheet, arbitors must be dissabled before ssetting some DCB values
-	qos_disable_arb( pf );						// set the arbitor disable bit first
+	qos_disable_arb( pf );						// Per note hidden in the data sheet, arbitors must be dissabled before ssetting some DCB values
+
 												// from the list on pg 181, step 1
 	qos_set_sizes( pf, tc8_mode );				// set packet buffer sizes and threshold
 	qos_set_mrqc( pf, tc8_mode );				// set mult rec/tx queue control
@@ -561,14 +578,11 @@ extern int enable_dcb_qos( portid_t pf, int* pctgs, int tc8_mode, int option ) {
 
 												// from the list step 3
 	qos_set_rates( pf, pctgs );					// set quantums based on percentages
-	qos_set_tdplane( pf );				// tc plane
-	qos_set_txpplane( pf );			// tx and rx packet plane
-	qos_set_rxpplane( pf );
+	qos_set_tdplane( pf );						// tx descriptor and packet plane configuration
+	qos_set_rxpplane( pf );						// rx packet plane configuration
 
-	qos_enable_arb( pf );				// part 4 from the list
+	qos_enable_arb( pf );						// part 4 from the list
 
-//fprintf( stderr, ">>>---------- 8 \n\n" );
-//return 1;
 	qos_set_minifg( pf );						// part 5 from the list
 
 	return 1;
