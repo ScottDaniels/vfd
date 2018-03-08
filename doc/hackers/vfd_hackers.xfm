@@ -13,13 +13,21 @@
 .ju on
 .hn off
 
-.** pick up boilar plate configuration for our docs
+.if hfm
+	.co bg white
+	.co #000000
+.fi
+
+
+.** pick up boiler plate configuration for our docs
 .im ../setup.im
+.im ../setup_image.im
 
 
 .st 18p
 .sf Helvetica
 .gv date
+.dv http http://
 
 .if pfm
 	.bc start
@@ -28,23 +36,45 @@
 	.st 14
 	User's Guide
 	.bc end
-	.st &fontsize
-.ei
-	.im caution.im 
+	.st &textsize
 
-	&bold(Virtual Function Daemon -- VFd)
-	.sp
-	&bold(User's Guide)
+.ei
+	.** links omitted if markdown because it seems to flag the submitter as a bot and suspends their id
+	.if &markdown 0 >
+		.dv http link:
+	.fi
+	.** .im caution.im 
+
+	.if hfm
+		.bc start
+		.st 18
+		&bold(Virtual Function Daemon -- VFd)
+		.st 14
+		.br
+		&bold(User's Guide)
+		.bc end
+	.fi
+	.st &textsize
 .fi
 
-&h1( Overview )
-&start_note
-A basic primer on SR-IOV can be found at .br
-&{http}www.intel.com/content/dam/doc/application-note/pci-sig-sr-iov-primer-sr-iov-technology-paper.pdf
-.sp .3
+.sv h1
+.sv start_note
+
+.if tfm
+	&h1( VFD -- User's Guide )
+.ei 
+	&h1( Overview )
+.fi
+&start_note( .5i )
+	A basic primer on SR-IOV can be found at .br
+	&{http}www.intel.com/content/dam/doc/application-note/pci-sig-sr-iov-primer-sr-iov-technology-paper.pdf
+	&end_note
+&start_note( .5i )
+	The VFd community is currently supporting various NICs produced by Mellanox, Broadcom, and Intel. 
 &end_note
+
 VFd is a daemon which manages the configuration of virtual and physical functions (VFs and PFs) which 
-are exposed by an SR-IOV &super capable network interface card (NIC).  
+are exposed by an SR-IOV &note  capable network interface card (NIC) &note .sm .  
 Configuration and management is accomplished via DPDK and allows for the following attributes to be
 controlled:
 .sp .5
@@ -77,7 +107,7 @@ individual VF configurations, placing them into the &cw(/var) directory, and usi
 add the configuration information as a VM is created. 
 
 .sp
-&start_sized_note( .75i )
+&start_note( .75i )
 We use the terms hack, hacker, and hacking in their original computer science sense. 
 Hacking is the act of manually manipulating a programme or environment in order to tailor it to 
 the programmer's needs.  In a production environment, the overall VFd configuration, and the specifications of each
@@ -87,7 +117,7 @@ necessary configuration commands to interact with VFd.
 &end_note
 At times it may be necessary to install and make use of VFd without the usual distribution and virtual 
 environment management components. 
-This guide provides a way to hack &super together such a system and describes what is required to
+This guide provides a way to hack &note together such a system and describes what is required to
 .sp .5
 &indent
 .bl &lic1
@@ -115,6 +145,7 @@ with VFs can be determined and the VFs added (see the &ital(Limitations and Requ
 this document for information regarding the number of VFs which must be created for each PF).  
 
 
+
 &h2( Adding VFs to a PF )
 Assuming the PF is &cw( 0000:01:00.1, ) the following can be used to add VFs under it.
 
@@ -131,7 +162,9 @@ Assuming the PF is &cw( 0000:01:00.1, ) the following can be used to add VFs und
 .sp
 .di : Enable the number of VFs desired ( .sm &cw( echo 32 >max_vfs ) .sm )
 .sp
-.di : Verify that the VFs were added (ls -al in the directory and expect to find symbolic links like &cw( virtfn3->../0000:01:10.7 ) .sm )
+.if false
+.di : Verify that the VFs were added (ls -al in the directory and expect to find symbolic links like virtfn3->../0000:01:10.7) 
+.fi
 .ed
 .ju on
 &uindent
@@ -221,12 +254,12 @@ generated as VFd attempts to initialise, and the DPDK library will abort.
 .sp 1
 
 .** .cn start atbot Times-roman 8p 1i
-&start_note
+&start_note( .5i )
 All code fragments provided in this document assume Kshell; your mileage may vary with bash or other shells.
 &end_note
 Given a known PF, it is simple to determine which other devices also belong to the same group. 
 .gv figure
-Figure &script_fig shows a simple set of commands &super which can be used to find the location of a known 
+Figure &script_fig shows a simple set of commands &note which can be used to find the location of a known 
 PCI device and then all other devices in the same group. 
 The output from the command shows the group number as the last directory in the path which 
 is the group number. 
@@ -280,9 +313,6 @@ The configuration file, &cw(vfd.conf,) must be created in &cw(/etc/vfd) before V
 The file contains a set of JSON encoded variables which are illustrated in figure &_fig.
 
 .ca start conf.ca 
-.pu
-.in .5i
-.ll 6i
 &ex_start
  {
    "comments": [
@@ -291,16 +321,17 @@ The file contains a set of JSON encoded variables which are illustrated in figur
      " revised for agave207 2016/04/06"
    ],
 
-   "fifo": "/var/lib/vfd/request",
-   "log_dir": "/var/log/vfd",
-   "log_keep": 60,
+   "fifo":           "/var/lib/vfd/request",
+   "log_dir":        "/var/log/vfd",
+   "log_keep":       60,
    "init_log_level": 2,
-   "log_level": 2,
-   "config_dir": "/var/lib/vfd/config",
-   "cpu_mask": "0x04",
+   "log_level":      2,
+   "config_dir":     "/var/lib/vfd/config",
+   "cpu_mask":       "0x04",
+   "numa_mem":       "64,64",
    "dpdk_log_level": 2,
    "dpdk_init_log_level": 8,
-   "default_mtu": 1500,
+   "default_mtu":    1500,
 
    "pciids": [ 
       { "id": "0000:01:00.0", "mtu": 9000, "enable_loopback": false }, 
@@ -310,7 +341,6 @@ The file contains a set of JSON encoded variables which are illustrated in figur
 &ex_end
 .fg A sample vfd.cfg configuration file.
 .sp
-.po
 .ca end
 .gv remain
 &ifroom(3:conf.ca)
@@ -335,6 +365,12 @@ Items worth noting in the config file are:
 &di(cpu_mask) This is a single bit which indicates which CPU the DPDK library will associate with. 
 	VFd limits this value to a single bit, and odd results may occur if a multi-bit integer 
 	is given.
+.sp .4
+&di(numa_mem) This is a string which supplies a comma separated set of values (e.g. 64,64). Each
+	value is the amount of memory that the DPDK library will attempt to allocate on each respective
+	NUMA socket 0 throgh n.  If this parameter is not given, "64,64" is assumed. For single
+	socket machines, a single value must be given or the DPDK library will fail during allocation
+	and abort the process.
 .sp .4
 &di(pciids) Explained in the following section
 &end_dlist
@@ -544,11 +580,11 @@ find them may be set in the main VFd configuration file.
   "strip_stag":       false,
   "allow_bcast":      true,
   "allow_mcast":      true,
-  "allow_un_ucast":   true,
+  "allow_un_ucast":   false,
   "start_cb":         "/var/lib/vmman/hot_plug daniels-1",
   "stop_cb":          "/var/lib/vmman/unplug daniels-1",
   "vlans":            [ 10, 11, 12, 33 ],
-  "macs":             [ "aa:bb:cc:dd:ee:f0", 
+  "macs":             [ "86:04:30:18:11:04", 
                         "11:22:33:44:55:66", 
                         "ff:ff:ff:ff:ff:ff" ]
 }
@@ -593,14 +629,21 @@ across all VFs on each PF.
 Please refer to the limits section later in this document for more details.
 
 &h3( Strip/Insert VLAN IDs )
-The VF may be configured to automatically remove the VLAN tag as each packet is received, and to automatically insert
-a VLAN tag as each packet is transmitted.
-Both functions are set with the same &cw( strip_stag ) field; as the strip and insert operations are related, they 
-are both either enabled or disabled and thus only one field is necessary.
-When this field is set to &cw( true, ) the array of VLAN IDs must contain only a single ID as it is impossible for 
-the NIC to know which VLAN ID to insert if multiple IDs are defined in the array. 
-Thus, VFd will reject the configuration if the strip stag field is set to &cw( true, ) and the VLAN array has more 
-than one element.
+The VF may be configured such that the VLAN tag in each packet is automatically removed (stripped) as the packet 
+arrives, and inserted into each packet as packets are transmitted.
+Setting the &cw( strip_stag ) field to true causes &bold(both) strip and insert to be preformed, and when set to 
+false, the VLAN tag is not removed on ingress and it is assumed that the transmitting application has added one 
+of the VLAN IDs in from the list to packets being transmitted. 
+
+
+.sp
+When the strip field is set to true, the VLAN ID is removed from all arriving packets, while the behavour for 
+transmitted packets is affected by the contents of the VLAN ID array.
+When the array contains a single VLAN ID, that ID is placed into each outgoing packet by the hardware and the 
+application is not expected to supply the ID.
+If the array contains two, or more, IDs, then the transmitting application is expected to add one of the listed
+IDs in the outgoing packet (it is impossible for the hardware to know which of the listed IDs should be applied 
+to any given packet).
 
 &h3( VF Quality of service configuration )
 In addition to the parameters noted above, a set of QoS parameters may be supplied in the VF configuration file.
@@ -629,6 +672,28 @@ Each element in the QoS &ital( queues ) array defines the bandwidth share for ea
 that are supported.
 Traffic classes are numbered from 0 (low priority) to 3 (highest priority). 
 In the illustration, the VF being configured would be allocated 20% of the priority 2 traffic class. 
+
+&h3( Mirroring Traffic )
+Traffic into a VF, out from a VF, or both, can be mirrored to another VF on the same PF.
+Configuring this can be accomplished by setting a mirror definition in the VF's config file
+before it is added, or by using the &cw(iplex mirror) command. 
+The latter is preferred as it allows dynamic changes without affecting the current flow of
+traffic to/from the VF, and as such the configuration file support is not discussed here.
+(Refer to the debugging wiki page in the repo for a more detailed coverage on mirroring.)
+.sp 1
+
+To alter the mirroring for a PF/VF pair the general syntax is:
+
+&ex_start
+  sudo iplex mirror <pf> <vf> <direction> <target>
+&ex_end
+
+Where &ital(pf) and &ital(vf) define the VF whose traffic is to be mirrored and &ital(target)
+defines the VF (on the same PF) that will receive the mirrored traffic.
+The &ital(direction) indicates which traffic is to be mirrored, and is specified from the 
+perspective of the VF, and &ital(NOT) from the perspective of the NIC.  
+Valid values are &ital(in) to mirror Rx traffic (inbound), &ital(out) to mirror Tx traffic (outbound),
+&ital(all) to mirror all traffic, and &ital(off) to disable mirroring. 
 
 
 &h3( Adding a configuration  )
@@ -777,7 +842,7 @@ behaviour with earlier versions.
 
 
 .** -----------------------------------------------------------------------------------------------
-.if tfm
+.if ! pfm
 	&h1( Notes: )
 	.sp 2
 	.cn showend
@@ -805,11 +870,11 @@ behaviour with earlier versions.
 .gv Date
 &def_list( .75i &ditext )
 &di(Source) vfd_hackers.xfm
-.sp 1
+&break
 &di(Original) 12 April 2016
-.sp 1
+&break
 &di(Revised) &_date
-.sp 1
+&break
 &di(Formatter) &_ver
 &end_dlist
 

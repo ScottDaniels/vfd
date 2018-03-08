@@ -75,6 +75,9 @@
 				16 Oct 2017 - mlx5: Add unknown unicast (promisc mode) for vf support.
 				30 Nov 2017 - Switch to using mac module functions to properly handle MACs during reset/delete
 								Restructure update_nic() from a forreal perspective.
+				10 Jan 2018 - mlx5: Add VF mirroring support.
+				10 Jan 2018 - mlx5: Add VF queue sharing per TC.
+				19 Feb 2018 - Add support to ensure config directories exist. (#263)
 */
 
 
@@ -113,6 +116,37 @@ const char *vnum = "v2";
 
 
 // --- misc support ----------------------------------------------------------------------------------------------
+
+/*
+	Ensure various directories specified in the config file exist. Returns
+	false if one or more is missing. This will create the directories if 
+	they aren't found, though that might fail is parms in upper level
+	directories don't allow that.
+*/
+static int check_dirs( parms_t* parms ) {
+	char wbuf[2048];
+
+	if( ! parms->config_dir ) {
+		bleat_printf( 0, "CRI: no config directory supplied in main parm file" );
+		return 0;
+	}
+
+	if( ! ensure_dir( parms->config_dir ) ) {
+		bleat_printf( 0, "CRI: cannot find or access config directory: %s", parms->config_dir );
+		return 0;
+	}
+
+	if( snprintf( wbuf, sizeof( wbuf ), "%s_live", parms->config_dir ) >= (int) sizeof( wbuf ) ) {
+		bleat_printf( 0, "CRI: pathname to config directory is too long: %s", parms->config_dir );
+		return 0;
+	}
+	if( ! ensure_dir( wbuf ) ) {
+		bleat_printf( 0, "CRI: cannot find or create live config directory: %s", wbuf );
+		return 0;
+	}
+
+	return 1;
+}
 
 /*
 	stricmp will compair two strins in strcmp() fashion, but will
@@ -483,7 +517,7 @@ static void close_ports( void ) {
 		for( j = 0; j < MAX_VFS; j++ ) {					// run regardless of what we think the count is!
 			if( port->mirrors[j].dir != MIRROR_OFF ) {
 				bleat_printf( 0, "terminating active mirror on shutdown: pf=%d vf=%d", port->rte_port_number,  port->vfs[i].num );
-				set_mirror( port->rte_port_number, port->vfs[i].num,  port->mirrors[j].id, port->mirrors[j].target, MIRROR_OFF );
+				set_mirror_wrp( port->rte_port_number, port->vfs[j].num,  port->mirrors[j].id, port->mirrors[j].target, MIRROR_OFF );
 			}
 		}
 	}
@@ -623,9 +657,10 @@ static int vfd_eal_init( parms_t* parms ) {
 	
 	if( parms->rflags & RF_NO_HUGE ) {
 		insert_pair( argv, &argc, MAX_ARGV_LEN, "--no-huge", NULL );
-		insert_pair( argv, &argc, MAX_ARGV_LEN, "-m", "128" );
+		insert_pair( argv, &argc, MAX_ARGV_LEN, "-m", "64" );
 	} else {
-		insert_pair( argv, &argc, MAX_ARGV_LEN, "--socket-mem", "64,64" );				// can't specify if huge pages are off
+		//insert_pair( argv, &argc, MAX_ARGV_LEN, "--socket-mem", "64,64" );				// can't specify if huge pages are off
+		insert_pair( argv, &argc, MAX_ARGV_LEN, "--socket-mem", parms->numa_mem );		// can't specify if huge pages are off
 	}
 
 
@@ -689,7 +724,12 @@ char*  gen_stats( sriov_conf_t* conf, int pf_only, int pf ) {
 			continue;
 		}
 
+		memset( &dev_info, 0, sizeof( dev_info ) );										// no status from rte function, but if it fails to populate we need to know, so 0s required
 		rte_eth_dev_info_get( conf->ports[i].rte_port_number, &dev_info );				// must use port number that we mapped during initialisation
+
+		if( dev_info.pci_dev == NULL ) {
+			continue;
+		}
 
 		l = snprintf( buf, sizeof( buf ), "%s   %4d    %04X:%02X:%02X.%01X",
 					"pf",
@@ -886,8 +926,11 @@ extern int vfd_update_nic( parms_t* parms, sriov_conf_t* conf ) {
 	for (i = 0; i < conf->num_ports; ++i){												// run each port we know about to apply port only changes
 		int ret;
 		struct sriov_port_s* port;
+		struct rte_eth_link link;
 
 		port = &conf->ports[i];
+
+		rte_eth_link_get_nowait(port->rte_port_number, &link);
 
 		//  WHY is this and disable pool done every time?  why is it not just done at the time of add?
 		tx_set_loopback( port->rte_port_number, !!(port->flags & PF_LOOPBACK) );		// enable loopback if set (disabled: all vm-vm traffic must go to TOR and back
@@ -971,7 +1014,7 @@ extern int vfd_update_nic( parms_t* parms, sriov_conf_t* conf ) {
 					}
 
 					if( port->mirrors[y].dir != MIRROR_OFF ) {													// stop the mirror on delete
-						set_mirror( port->rte_port_number, vf->num, port->mirrors[y].id, port->mirrors[y].target, MIRROR_OFF );		// turn off
+						set_mirror_wrp( port->rte_port_number, vf->num, port->mirrors[y].id, port->mirrors[y].target, MIRROR_OFF );		// turn off
 						port->mirrors[y].dir = MIRROR_OFF;
 						port->mirrors[y].target = MAX_VFS + 1;													// target is unsigned -- set out of range high
 						idm_return( conf->mir_id_mgr, port->mirrors[y].id );									// mark the id as unused in allocator
@@ -986,23 +1029,24 @@ extern int vfd_update_nic( parms_t* parms, sriov_conf_t* conf ) {
 					for(v = 0; v < vf->num_vlans; ++v) {
 						int vlan = vf->vlans[v];
 						int strip_on = (vf->strip_stag || vf->strip_ctag) ? 1 : 0;
-						bleat_printf( 2, "delete vlan: port: %d vf: %d vlan: %d", port->rte_port_number, vf->num, vlan );
-						if ((get_nic_type(port->rte_port_number) != VFD_MLX5) || !strip_on) // strip/insert vlan is set differently in mlx5
+						if ((get_nic_type(port->rte_port_number) != VFD_MLX5) || !strip_on) { // strip/insert vlan is set differently in mlx5
+							bleat_printf( 2, "delete vlan: port: %d vf: %d vlan: %d", port->rte_port_number, vf->num, vlan );
 							set_vf_rx_vlan(port->rte_port_number, vlan, vf_mask, SET_OFF );		// remove the vlan id from the list
+						}
 					}
 				} else {
 					int v;
 
 					if( port->mirrors[y].dir != MIRROR_OFF ) {						// setup the mirror
-						set_mirror( port->rte_port_number, vf->num, port->mirrors[y].id, port->mirrors[y].target, port->mirrors[y].dir );		// set target and type (in/out/both)
+						set_mirror_wrp( port->rte_port_number, vf->num, port->mirrors[y].id, port->mirrors[y].target, port->mirrors[y].dir );		// set target and type (in/out/both)
 						port->num_mirrors++;
 					}
 
 					for(v = 0; v < vf->num_vlans; ++v) {
 						int vlan = vf->vlans[v];
 						int strip_on = (vf->strip_stag || vf->strip_ctag) ? 1 : 0;
-						bleat_printf( 2, "add vlan: port: %d vf=%d vlan=%d", port->rte_port_number, vf->num, vlan );
 						if ((get_nic_type(port->rte_port_number) != VFD_MLX5) || !strip_on) // strip/insert vlan is set differently in mlx5
+							bleat_printf( 2, "add vlan: port: %d vf=%d vlan=%d", port->rte_port_number, vf->num, vlan );
 							set_vf_rx_vlan(port->rte_port_number, vlan, vf_mask, on );		// add the vlan id to the list
 					}
 				}
@@ -1053,10 +1097,6 @@ extern int vfd_update_nic( parms_t* parms, sriov_conf_t* conf ) {
 				}
 
 				if( vf->rate || vf->min_rate ) {
-					struct rte_eth_link link;
-
-					rte_eth_link_get_nowait(port->rte_port_number, &link);
-
 					if( vf->rate ) {
 						bleat_printf( 1, "setting rate: %d", (int)  ( (float)link.link_speed * vf->rate ) );
 						set_vf_rate_limit( port->rte_port_number, vf->num, (uint16_t)( (float)link.link_speed * vf->rate ), 0x01 );
@@ -1128,9 +1168,11 @@ extern int vfd_update_nic( parms_t* parms, sriov_conf_t* conf ) {
 			}
 
 			if( change2port && (g_parms->rflags & RF_ENABLE_QOS) ) {		// changes, we must recompute queue shares and push to nic
-				if (get_nic_type(port->rte_port_number) != VFD_MLX5) { // No support in mlx5 yet
+				gen_port_qshares( port );									// compute and save in the port struct
+				if (get_nic_type(port->rte_port_number) == VFD_MLX5) {
+					mlx5_set_vf_tcqos( port, link.link_speed );
+				} else {
 					//uint8_t* pp;
-					gen_port_qshares( port );									// compute and save in the port struct
 					qos_set_credits( port->rte_port_number, port->mtu, port->vftc_qshares, TC_4PERQ_MODE );	// push out to nic
 					//qos_set_credits( port->rte_port_number, port->mtu, pp, TC_4PERQ_MODE );	// push out to nic
 				}
@@ -1255,6 +1297,7 @@ static void set_signals( void ) {
 	int i;
 	int nele;		// number of elements in the list
 	
+	memset( &sa, 0, sizeof( sa ) );
 	sa.sa_handler = sig_ign;						// we ignore hup, so special function for this
 	if( sigaction( SIGHUP, &sa, NULL ) < 0 ) {
 		bleat_printf( 0, "WRN: unable to set signal trap for %d: %s", SIGHUP, strerror( errno ) );
@@ -1508,7 +1551,6 @@ main(int argc, char **argv)
 		case '?':
 			printf( "\nVFd %s %s\n", vnum, version );
 			printf( "based on: %s %d.%d%s.%d\n", RTE_VER_PREFIX, RTE_VER_YEAR,  RTE_VER_MONTH, RTE_VER_SUFFIX,  RTE_VER_RELEASE );
-			printf( "(18122 - retrofit of current nic_agnostic ontop of dpdk 17.08)\n" );
 			printf("%s\n", main_help);
 			exit( 0 );
 			break;
@@ -1540,6 +1582,10 @@ main(int argc, char **argv)
 	}
 
 	g_parms->forreal = forreal;
+
+	if( ! check_dirs( g_parms ) ) { // ensure config directories are good	
+		exit( 1 );
+	}
 
 	if( (running_config = (sriov_conf_t *) malloc( sizeof( *running_config ) )) == NULL ) {
 		bleat_printf( 0, "abort: unable to allocate memory for running config" );
@@ -1587,13 +1633,7 @@ main(int argc, char **argv)
 
 		bleat_printf( 1, "starting rte initialisation" );
 		
-		rte_openlog_stream(stderr);
-		//rte_log_set_level(~RTE_LOGTYPE_PMD && ~RTE_LOGTYPE_PORT, g_parms->dpdk_init_log_level);
-		//ret = rte_log_set_level(RTE_LOGTYPE_PMD, g_parms->dpdk_init_log_level);
-
-
-		//bleat_printf( 2, "log level = %d, log type = %d, ret = %d", rte_log_cur_msg_loglevel(), rte_log_cur_msg_logtype(), ret);
-		
+		rte_openlog_stream(stderr);						// log level for initialisation will be set with eal_init call
 
 		n_ports = rte_eth_dev_count();
 		if( n_ports > MAX_PORTS ) {
@@ -1773,11 +1813,14 @@ main(int argc, char **argv)
 	
 	run_start_cbs( running_config );				// run any user startup callback commands defined in VF configs
 
-	bleat_printf( 1, "version: %s", version );
-	bleat_printf( 1, "initialisation complete, setting bleat level to %d; starting to loop", g_parms->log_level );
-	bleat_set_lvl( g_parms->log_level );					// initialisation finished, set log level to running level
+	bleat_printf( 0, "version: %s", version );
+	bleat_printf( 0, "initialisation complete, setting bleat level to %d; starting to loop", g_parms->log_level );
+	bleat_printf( 0, "based on: %s %d.%d%s.%d", RTE_VER_PREFIX, RTE_VER_YEAR,  RTE_VER_MONTH, RTE_VER_SUFFIX,  RTE_VER_RELEASE );
+	bleat_set_lvl( g_parms->log_level );											// initialisation finished, set log level to running level
 	if( forreal ) {
-		//rte_log_set_level(g_parms->dpdk_init_log_level, RTE_LOGTYPE_PMD && RTE_LOGTYPE_PORT);
+		rte_log_set_level( RTE_LOGTYPE_EAL, g_parms->dpdk_log_level );				// set logging to config requested 'run' values
+		rte_log_set_level( RTE_LOGTYPE_PMD, g_parms->dpdk_log_level );
+		rte_log_set_level( RTE_LOGTYPE_PORT, g_parms->dpdk_log_level );
 	}
 
 	free( parm_file );			// now it's safe to free the parm file

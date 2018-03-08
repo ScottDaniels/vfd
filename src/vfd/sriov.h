@@ -91,6 +91,7 @@
 #include "vfd_ixgbe.h"
 #include "vfd_i40e.h"
 #include "vfd_bnxt.h"
+#include "vfd_mlx5.h"
 
 
 // ---------------------------------------------------------------------------------------
@@ -231,6 +232,7 @@ struct vf_s
 	int     strip_ctag;          
 	int     strip_stag;          
 	int     insert_stag;         
+	int     insert_ctag;         
 	int     vlan_anti_spoof;      // if use VLAN filter then set VLAN anti spoofing
 	int     mac_anti_spoof;       // set MAC anti spoofing when MAC filter is in use
 	int     allow_bcast;
@@ -251,6 +253,7 @@ struct vf_s
 	uid_t	owner;					// user id which 'owns' the VF (owner of the config file from stat())
 	char*	start_cb;				// user commands driven just after initialisation and just before termination
 	char*	stop_cb;
+	char*	config_name;			// name given in config file for delete confirmation
 	uint8_t	qshares[MAX_TCS];		// percentage of each queue (TC) that has been set in the config for the vf
 };
 
@@ -416,6 +419,7 @@ void init_port_config(void);
 
 int get_split_ctlreg( portid_t port_id, uint16_t vf_id );
 int set_mirror( portid_t port_id, uint32_t vf, uint8_t id, uint8_t target, uint8_t direction );
+int set_mirror_wrp( portid_t port_id, uint32_t vf, uint8_t id, uint8_t target, uint8_t direction );
 void set_queue_drop( portid_t port_id, int state );
 void set_split_erop( portid_t port_id, uint16_t vf_id, int state );
 
@@ -528,6 +532,7 @@ void qos_set_credits( portid_t pf, int mtu, int* rates, int tc8_mode );
 extern void qos_enable_arb( portid_t pf );
 extern void qos_set_tdplane( portid_t pf, uint8_t* pctgs, uint8_t *bwgs, int ntcs, int mtu );
 extern void qos_set_txpplane( portid_t pf, uint8_t* pctgs, uint8_t *bwgs, int ntcs, int mtu );
+extern void mlx5_set_vf_tcqos( sriov_port_t *port, uint32_t link_speed );
 
 
 //------- these are hacks in the dpdk library and we  must find a good way to rid ourselves of them ------

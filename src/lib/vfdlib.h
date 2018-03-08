@@ -40,6 +40,8 @@
 #define MAX_TCS			8			// max number of traffic classes supported (0 - 7)
 #define NUM_BWGS		8			// number of bandwidth groups
 
+typedef char const* const_str;		// pointer to an unmutable string
+
 typedef struct {
     char* hr_name;          // human readable name used for diagnostics
     unsigned int flags;     // TCF_ flasg constants
@@ -88,6 +90,7 @@ typedef struct {
 	char*	stats_path;				// filename where we might dump stats
 	char*	pid_fname;				// if we daemonise we should write our pid here.
 	char*	cpu_mask;				// should be something like 0x04, but could be decimal.  string so it can have lead 0x
+	char*	numa_mem;				// something like 64 or 64,64 or 64,128.  For our little app, the default 64,64 should be fine
 
 									// these things have no defaults
 	int		npciids;				// number of pciids specified for us to configure
@@ -223,6 +226,11 @@ extern int idm_use( void* vid, int id_val );
 extern int idm_is_used( void* vid, int id_val );
 extern void idm_return( void* vid, int id_val );
 extern void idm_free( void* vid );
+
+//----------------- filesys  -----------------------------------------------------------------------------------
+extern int rm_file( const_str fname, int backup );
+extern int mv_file( const_str fname, char* target );
+extern int ensure_dir( const_str pathname );
 
 
 #endif
