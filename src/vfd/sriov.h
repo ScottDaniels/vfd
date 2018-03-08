@@ -47,6 +47,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include <rte_version.h>
 #include <rte_alarm.h>
 #include <rte_common.h>
 #include <rte_byteorder.h>
@@ -66,12 +67,15 @@
 #include <rte_mbuf.h>
 #include <rte_interrupts.h>
 #include <rte_pci.h>
-//#include <rte_bus_pci.h>
+
+#if (RTE_VER_YEAR > 17 )
+#include <rte_bus_pci.h>
+#endif
+
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
-#include <rte_version.h>
 
 // this MUST be defined before pulling in the other headers. Port id length changed with 
 // dpdk v17.11; this allows us to revert to build with older dpdk versions. The default
